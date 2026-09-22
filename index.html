@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Bacteria Buster - 衝鋒槍消滅醜惡細菌</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0a0d14;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: Arial, sans-serif;
+      user-select: none;
+      overflow: hidden;
+    }
+    canvas {
+      background: #10141d;
+      box-shadow: 0 0 25px rgba(0, 0, 0, 0.8);
+      cursor: none; /* 隱藏原生滑鼠箭頭 */
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+const WIDTH = canvas.width;
+const HEIGHT = canvas.height;
+const COLORS = ["#477328", "#5e2b6e", "#9e5c1e", "#852323", "#3d5c52"];
+
+let score = 0;
+let timeLeft = 30;
+let gameOver = false;
+let lastTimerUpdate = Date.now();
+
+let mouseX = WIDTH / 2;
+let mouseY = HEIGHT / 2;
+let gunRecoil = 0;
+let muzzleFlash = 0;
+
+canvas.addEventListener("mousemove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+  mouseY = e.clientY - rect.top;
+});
+
+// 衝鋒槍子彈
+class Bullet {
+  constructor(tx, ty) {
+    this.x = WIDTH / 2 + 80;
+    this.y = HEIGHT;
+    const dist = Math.hypot(tx - this.x, ty - this.y);
+    const speed = 32;
+    this.vx = ((tx - this.x) / dist) * speed;
+    this.vy = ((ty - this.y) / dist) * speed;
+    this.life = Math.floor(dist / speed) + 1;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.life--;
+    return this.life > 0;
+  }
+  draw() {
+    ctx.strokeStyle = "#fff066";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x - this.vx * 0.7, this.y - this.vy * 0.7);
+    ctx.stroke();
+  }
+}
+
+// 爆裂粒子
+class Particle {
+  constructor(x, y, color) {
+    this.x = x;
+    this.y = y;
+    this.color = color;
+    const ang = Math.random() * Math.PI * 2;
+    const spd = Math.random() * 5 + 2;
+    this.vx = Math.cos(ang) * spd;
+    this.vy = Math.sin(ang) * spd;
+    this.life = 14;
+    this.r = Math.random() * 3 + 2;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.life--;
+    return this.life > 0;
+  }
+  draw() {
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// 細菌類別
+class Bacteria {
+  constructor() {
+    this.r = Math.floor(Math.random() * 12 + 28);
+    this.x = Math.random() * (WIDTH - this.r * 2 - 140) + this.r + 70;
+    this.y = Math.random() * (HEIGHT - this.r * 2 - 140) + this.r + 70;
+
+    const speed = Math.random() * 1.5 + 2.2;
+    const angle = Math.random() * Math.PI * 2;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    this.faceType = Math.floor(Math.random() * 3);
+    this.phase = Math.random() * Math.PI * 2;
+
+    this.flagellaCount = Math.floor(Math.random() * 3 + 6);
+    this.flagella = [];
+    for (let i = 0; i < this.flagellaCount; i++) {
+      this.flagella.push({
+        len: this.r * (Math.random() * 0.6 + 1.2),
+        offset: (i - (this.flagellaCount - 1) / 2) * 0.22,
+        speed: Math.random() * 0.8 + 1.2,
+        shift: Math.random() * Math.PI * 2
+      });
+    }
+  }
+
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.phase += 0.2;
+
+    if (this.x - this.r <= 0 || this.x + this.r >= WIDTH ||
+        this.y - this.r <= 0 || this.y + this.r >= HEIGHT) {
+      return false; // 觸壁即死
+    }
+    return true;
+  }
+
+  draw() {
+    const moveAngle = Math.atan2(this.vy, this.vx) + Math.PI;
+
+    // 1. 動態多條鞭毛
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = 2;
+    for (const fl of this.flagella) {
+      const tAngle = moveAngle + fl.offset;
+      const wobble = Math.sin(this.phase * fl.speed + fl.shift) * 12;
+
+      const sx = this.x + Math.cos(tAngle) * (this.r * 0.9);
+      const sy = this.y + Math.sin(tAngle) * (this.r * 0.9);
+      const mx = sx + Math.cos(tAngle) * (fl.len * 0.5) + Math.sin(tAngle) * wobble;
+      const my = sy + Math.sin(tAngle) * (fl.len * 0.5) - Math.cos(tAngle) * wobble;
+      const ex = mx + Math.cos(tAngle) * (fl.len * 0.5) - Math.sin(tAngle) * wobble;
+      const ey = my + Math.sin(tAngle) * (fl.len * 0.5) + Math.cos(tAngle) * wobble;
+
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(mx, my, ex, ey);
+      ctx.stroke();
+    }
+
+    // 2. 肉體
+    ctx.fillStyle = this.color;
+    ctx.strokeStyle = "#1b2416";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // 3. 醜惡面容
+    if (this.faceType === 0) {
+      const eyes = [{ox: -0.4, oy: -0.2, er: 7}, {ox: 0.0, oy: -0.35, er: 9}, {ox: 0.45, oy: -0.15, er: 6}];
+      eyes.forEach(e => {
+        ctx.fillStyle = "#ffe5e5";
+        ctx.beginPath();
+        ctx.arc(this.x + this.r * e.ox, this.y + this.r * e.oy, e.er, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#990000";
+        ctx.beginPath();
+        ctx.arc(this.x + this.r * e.ox, this.y + this.r * e.oy, e.er / 2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.strokeStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.r * 0.4, this.y + this.r * 0.2);
+      ctx.lineTo(this.x, this.y + this.r * 0.5);
+      ctx.lineTo(this.x + this.r * 0.4, this.y + this.r * 0.2);
+      ctx.stroke();
+
+    } else if (this.faceType === 1) {
+      ctx.fillStyle = "#fff0f0";
+      ctx.beginPath();
+      ctx.arc(this.x, this.y - 4, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.arc(this.x, this.y - 4, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#ff3333";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.r * 0.5, this.y + this.r * 0.4);
+      for (let k = 0; k < 5; k++) {
+        const kx = this.x - this.r * 0.5 + (k + 1) * (this.r * 0.2);
+        const ky = this.y + this.r * 0.4 + (k % 2 === 0 ? 8 : -8);
+        ctx.lineTo(kx, ky);
+      }
+      ctx.stroke();
+
+    } else {
+      [-1, 1].forEach(mult => {
+        ctx.fillStyle = "#fff2a3";
+        ctx.beginPath();
+        ctx.arc(this.x + mult * this.r * 0.35, this.y - this.r * 0.1, 6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.r * 0.5, this.y - this.r * 0.4);
+      ctx.lineTo(this.x - this.r * 0.15, this.y - this.r * 0.2);
+      ctx.moveTo(this.x + this.r * 0.15, this.y - this.r * 0.2);
+      ctx.lineTo(this.x + this.r * 0.5, this.y - this.r * 0.4);
+      ctx.stroke();
+      ctx.strokeStyle = "#fff";
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.r * 0.2, this.y + this.r * 0.2);
+      ctx.lineTo(this.x - this.r * 0.2, this.y + this.r * 0.5);
+      ctx.moveTo(this.x + this.r * 0.2, this.y + this.r * 0.2);
+      ctx.lineTo(this.x + this.r * 0.2, this.y + this.r * 0.5);
+      ctx.stroke();
+    }
+  }
+}
+
+// 繪製衝鋒槍專用準星
+function drawSmgReticle(x, y) {
+  const r = 22 + gunRecoil;
+
+  // 1. 擊發火花
+  if (muzzleFlash > 0) {
+    ctx.strokeStyle = `rgba(255, 230, 80, ${muzzleFlash / 5})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r + 10, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // 2. 外部瞄準環
+  ctx.strokeStyle = "#00e5ff";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 3. 四方刻度齒標
+  ctx.lineWidth = 2.5;
+  [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2].forEach(ang => {
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(ang) * (r - 4), y + Math.sin(ang) * (r - 4));
+    ctx.lineTo(x + Math.cos(ang) * (r + 7), y + Math.sin(ang) * (r + 7));
+    ctx.stroke();
+  });
+
+  // 4. 中心紅色雷射瞄準點
+  ctx.fillStyle = "#ff3333";
+  ctx.beginPath();
+  ctx.arc(x, y, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+let bacteriaList = Array.from({ length: 6 }, () => new Bacteria());
+let bullets = [];
+let particles = [];
+
+// 點擊觸發 3 連發射擊
+canvas.addEventListener("mousedown", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  gunRecoil = 9;
+  muzzleFlash = 5;
+
+  if (gameOver) {
+    score = 0;
+    timeLeft = 30;
+    gameOver = false;
+    bacteriaList = Array.from({ length: 6 }, () => new Bacteria());
+    bullets = [];
+    particles = [];
+    lastTimerUpdate = Date.now();
+    return;
+  }
+
+  // 產生 3 發帶微幅散佈的子彈
+  for (let i = 0; i < 3; i++) {
+    const spX = mx + (Math.random() * 20 - 10);
+    const spY = my + (Math.random() * 20 - 10);
+    bullets.push(new Bullet(spX, spY));
+  }
+
+  // 命中判定
+  let hit = false;
+  for (let i = bacteriaList.length - 1; i >= 0; i--) {
+    const b = bacteriaList[i];
+    if (Math.hypot(mx - b.x, my - b.y) <= b.r) {
+      score += 100;
+      hit = true;
+      for (let p = 0; p < 14; p++) {
+        particles.push(new Particle(b.x, b.y, b.color));
+      }
+      bacteriaList.splice(i, 1);
+      bacteriaList.push(new Bacteria());
+      break;
+    }
+  }
+
+  if (!hit && score > 0) {
+    score = Math.max(0, score - 10);
+  }
+});
+
+// 主遊戲迴圈
+function gameLoop() {
+  const now = Date.now();
+  if (!gameOver && now - lastTimerUpdate >= 1000) {
+    timeLeft--;
+    lastTimerUpdate = now;
+    if (timeLeft <= 0) gameOver = true;
+  }
+
+  if (gunRecoil > 0) gunRecoil *= 0.75;
+  if (muzzleFlash > 0) muzzleFlash--;
+
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+  if (!gameOver) {
+    // 更新細菌
+    for (let i = bacteriaList.length - 1; i >= 0; i--) {
+      const b = bacteriaList[i];
+      if (!b.update()) {
+        for (let p = 0; p < 10; p++) {
+          particles.push(new Particle(b.x, b.y, b.color));
+        }
+        bacteriaList.splice(i, 1);
+        bacteriaList.push(new Bacteria());
+      } else {
+        b.draw();
+      }
+    }
+
+    // 更新子彈
+    bullets = bullets.filter(bul => {
+      const alive = bul.update();
+      if (alive) bul.draw();
+      return alive;
+    });
+
+    // 更新粒子
+    particles = particles.filter(p => {
+      const alive = p.update();
+      if (alive) p.draw();
+      return alive;
+    });
+  }
+
+  // UI
+  ctx.fillStyle = "#f0f0f0";
+  ctx.font = "bold 20px Arial";
+  ctx.textAlign = "left";
+  ctx.fillText(`Score: ${score}`, 25, 40);
+
+  ctx.fillStyle = timeLeft <= 5 ? "#ff5555" : "#ffc850";
+  ctx.textAlign = "right";
+  ctx.fillText(`Time: ${timeLeft}s`, WIDTH - 25, 40);
+
+  // 繪製準星
+  drawSmgReticle(mouseX, mouseY);
+
+  if (gameOver) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    ctx.fillStyle = "#ff4444";
+    ctx.font = "bold 42px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("TIME UP!", WIDTH / 2, HEIGHT / 2 - 30);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "24px Arial";
+    ctx.fillText(`Final Score: ${score}`, WIDTH / 2, HEIGHT / 2 + 20);
+
+    ctx.fillStyle = "#aaaaaa";
+    ctx.font = "16px Arial";
+    ctx.fillText("點擊畫面重新開始", WIDTH / 2, HEIGHT / 2 + 70);
+
+    drawSmgReticle(mouseX, mouseY);
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
